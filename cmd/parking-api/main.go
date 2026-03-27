@@ -7,18 +7,21 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
-	"time"
 
 	v1 "parking-service/api/v1"
+	"parking-service/internal/config"
 	"parking-service/internal/parking"
 )
 
 func main() {
-	port := strings.TrimSpace(os.Getenv("HTTP_PORT"))
-	if port == "" {
-		port = "8080"
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("failed to load config: %v", err)
+	}
+
+	if cfg.ConfigFile != "" {
+		log.Printf("loaded config file: %s", cfg.ConfigFile)
 	}
 
 	repository := parking.NewInMemoryRepository([]parking.Spot{
@@ -34,16 +37,16 @@ func main() {
 	handler.RegisterRoutes(mux)
 
 	server := &http.Server{
-		Addr:         ":" + port,
+		Addr:         ":" + cfg.HTTP.Port,
 		Handler:      mux,
-		ReadTimeout:  5 * time.Second,
-		WriteTimeout: 10 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		ReadTimeout:  cfg.HTTP.ReadTimeout,
+		WriteTimeout: cfg.HTTP.WriteTimeout,
+		IdleTimeout:  cfg.HTTP.IdleTimeout,
 	}
 
 	errCh := make(chan error, 1)
 	go func() {
-		log.Printf("parking-api is listening on :%s", port)
+		log.Printf("parking-api is listening on :%s (env=%s)", cfg.HTTP.Port, cfg.AppEnv)
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}
@@ -59,7 +62,7 @@ func main() {
 		log.Fatalf("server failed: %v", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.HTTP.ShutdownTimeout)
 	defer cancel()
 
 	if err := server.Shutdown(ctx); err != nil {
