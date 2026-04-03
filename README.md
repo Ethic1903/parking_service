@@ -1,119 +1,132 @@
-# Сервис поиска и бронирования парковочных мест
+# Parking Service
 
-Учебный проект по теме **Twelve-Factor App** на Go.
+Учебный сервис поиска и бронирования парковочных мест на Go.
 
-## Что уже реализовано
+## Что реализовано в этой практике
 
-- REST API для фронтенда:
-  - `GET /health`
-  - `GET /api/v1/spots`
-  - `POST /api/v1/bookings`
-- Бизнес-логика поиска доступных мест и бронирования.
-- In-memory хранилище для локальной разработки и тестов.
-- Unit-тесты для ключевых сценариев.
-- Конфигурация через environment variables и `viper` (env + optional YAML).
+- Приложение переведено на внешнее хранилище состояния (PostgreSQL/SQLite).
+- In-memory хранение удалено из runtime-кода.
+- Добавлен SQL-репозиторий с транзакционным бронированием.
+- Добавлен `docker-compose.yml` с PostgreSQL как attachable resource.
+- Все параметры подключения к БД читаются из env (через `viper`).
+- Поддержан локальный режим с SQLite и контейнерный режим с PostgreSQL.
 
-## Фактор I. Codebase
+## API
 
-**One codebase tracked in revision control, many deploys.**
+- `GET /health`
+- `GET /api/v1/spots`
+- `POST /api/v1/bookings`
 
-Это реализовано так:
+## Конфигурация (env)
 
-- Один репозиторий `parking-service` для одного сервиса.
-- Один модуль Go (`go.mod`) и единый entrypoint приложения: `cmd/parking-api`.
-- Выделенные внутренние модули (`internal/parking`) и версия REST API (`api/v1`).
-- Одинаковый код может быть развернут в разных окружениях (dev/stage/prod) без изменений исходников.
+HTTP:
 
-## Фактор II. Dependencies
+- `APP_ENV`
+- `HTTP_PORT`
+- `HTTP_READ_TIMEOUT_SEC`
+- `HTTP_WRITE_TIMEOUT_SEC`
+- `HTTP_IDLE_TIMEOUT_SEC`
+- `HTTP_SHUTDOWN_TIMEOUT_SEC`
 
-**Explicitly declare and isolate dependencies.**
+Storage:
 
-Это реализовано так:
+- `DB_DRIVER` (`sqlite` или `postgres`)
+- `DB_SQLITE_PATH` (для `sqlite`)
+- `DB_POSTGRES_HOST`
+- `DB_POSTGRES_PORT`
+- `DB_POSTGRES_DBNAME`
+- `DB_POSTGRES_USER`
+- `DB_POSTGRES_PASSWORD`
+- `DB_POSTGRES_SSLMODE`
 
-- Все зависимости объявлены через Go Modules (`go.mod`, `go.sum`).
-- Зависимости фиксируются командой `go mod tidy`.
-- Сборка/тесты выполняются с `-mod=readonly`, чтобы исключить неявные изменения зависимостей.
-- Сервис не использует `os/exec` и не зависит от внешних системных утилит вроде `curl`.
-- Для контейнерного деплоя добавлен `Dockerfile` с воспроизводимой сборкой бинаря.
+Дополнительно:
 
-## Фактор III. Config
+- `CONFIG_FILE` (опциональный путь к YAML)
 
-**Store config in the environment.**
+Пример значений есть в `.env.example`.
 
-Цель: полностью отделить настройки приложения от кода, чтобы один и тот же бинарь/образ запускался в `dev/staging/prod` только за счет переменных окружения.
-
-### Шаг 1. Выявление «зашитых» значений
-
-В текущем сервисе к изменяемым настройкам относятся:
-
-- порт HTTP-сервера;
-- таймауты HTTP-сервера (read/write/idle/shutdown);
-- логическое окружение приложения (`APP_ENV`);
-- путь до локального YAML-конфига (`CONFIG_FILE`, только для dev-сценариев).
-
-В текущей версии сервиса нет строк подключения к БД и API-ключей, поэтому секретов в рантайме пока нет.
-
-### Шаг 2. Значения по умолчанию
-
-В `internal/config` добавлен централизованный загрузчик конфигурации:
-
-- используется `github.com/spf13/viper`;
-- все ключевые параметры имеют безопасные дефолты;
-- приложение запускается локально даже без установки переменных окружения.
-
-### Шаг 3. Работа с секретами и шаблон env
-
-- Добавлен файл `.env.example` со списком переменных и примерными значениями.
-- Файл `.env` уже находится в `.gitignore` и не попадет в репозиторий.
-- Реальные секреты (когда появятся) должны передаваться только через окружение.
-
-### Шаг 4. Менеджер конфигурации (Viper)
-
-Загрузка работает в таком порядке приоритета:
-
-1. переменные окружения;
-2. YAML-файл (`CONFIG_FILE` или по умолчанию `config/local.yaml`, если найден);
-3. встроенные дефолты в коде.
-
-Это позволяет хранить локальные dev-настройки в YAML, но при запуске в контейнере или CI переопределять их через env без пересборки.
-
-## Структура проекта
-
-```text
-parking-service/
-  api/v1/                # REST handlers (версия API)
-  cmd/parking-api/       # main.go (точка входа)
-  config/                # YAML-конфиг для локальной разработки
-  internal/config/       # централизованный загрузчик конфигурации
-  internal/parking/      # доменная модель, сервис, репозиторий, тесты
-  go.mod
-  go.sum
-  Makefile
-  Dockerfile
-  .env.example
-```
-
-## Быстрый старт
+## Локальный запуск (SQLite)
 
 ```bash
 go mod tidy
 go test ./...
-go run -mod=readonly ./cmd/parking-api
+DB_DRIVER=sqlite DB_SQLITE_PATH=parking.db go run ./cmd/parking-api
 ```
 
-Сервис стартует на порту `8080` (или из переменной `HTTP_PORT`).
+## Docker Compose (PostgreSQL)
 
-Полный список переменных окружения с примерами доступен в `.env.example`.
+```bash
+docker compose up -d --build
+docker compose ps
+```
+
+Сервис `app` подключается к БД по имени сервиса `postgres` внутри compose-сети.
+
+## Выполнение шагов практики 1-5
+
+### 1) Добавление БД через Docker Compose
+
+Реализовано в `docker-compose.yml`:
+
+- сервис `postgres`;
+- сервис `app`;
+- общая сеть `parking-net`;
+- volume `postgres-data` для сохранения данных.
+
+### 2) Подключение к БД через переменные окружения
+
+Реализовано в `tools/config` и `tools/storage/db.go`:
+
+- `DB_DRIVER=sqlite` для локальной разработки;
+- `DB_DRIVER=postgres` в контейнере;
+- строка подключения строится из env-переменных.
+
+### 3) Перенос состояния из памяти в БД
+
+Реализовано в `internal/pkg/repository/sql_repository.go` и `migrations/`:
+
+- места и их доступность хранятся в таблице `parking_spots`;
+- бронирования хранятся в таблице `bookings`;
+- бронирование выполняется в транзакции (`UPDATE availability + INSERT booking`).
+
+### 4) Симуляция сбоя процесса
+
+Запуск нескольких экземпляров:
+
+```bash
+docker compose up -d --scale app=3
+docker compose ps
+```
+
+Остановите один контейнер app:
+
+```bash
+docker stop <app_container_name>
+```
+
+Проверьте, что другие экземпляры продолжают работать, а записи не теряются, так как хранятся в PostgreSQL.
+
+### 5) Проверка stateless
+
+```bash
+docker compose stop app
+docker compose up -d app
+```
+
+Или полный рестарт:
+
+```bash
+docker compose down
+docker compose up -d
+```
+
+Данные сохраняются благодаря `postgres-data` volume и внешней БД.
 
 ## Примеры запросов
-
-Получить список мест:
 
 ```bash
 curl "http://localhost:8080/api/v1/spots?location=center&vehicleType=car&maxPrice=180"
 ```
-
-Забронировать место:
 
 ```bash
 curl -X POST "http://localhost:8080/api/v1/bookings" \
@@ -125,111 +138,3 @@ curl -X POST "http://localhost:8080/api/v1/bookings" \
     "to": "2026-03-20T12:30:00Z"
   }'
 ```
-
-## Практика: контейнеризация и изоляция (шаги 1-7)
-
-Цель: упаковать сервис в контейнер так, чтобы он запускался одинаково на машине разработчика, в тестовом окружении и в продакшене, независимо от локальной установки Go и библиотек.
-
-### Шаг 1. Подготовка приложения
-
-В этом проекте уже выполнено:
-
-- приложение стартует из `cmd/parking-api/main.go`;
-- порт задается через переменную окружения `HTTP_PORT` (по умолчанию `8080`);
-- сервер слушает `:PORT` (это эквивалент `0.0.0.0:PORT`, доступно извне контейнера).
-
-### Шаг 2. Dockerfile
-
-В корне проекта уже есть `Dockerfile` с multi-stage сборкой:
-
-- стадия `build` компилирует бинарь;
-- финальная стадия (`distroless`) содержит только приложение и минимум рантайма.
-
-### Шаг 3. Игнорирование лишнего
-
-В корне проекта добавлен `.dockerignore`, чтобы не копировать в build-context лишние файлы (`.git`, `bin`, логи, `venv`, `node_modules` и т.д.).
-
-### Шаг 4. Сборка образа
-
-```bash
-docker build -t parking-api:local .
-```
-
-Альтернатива через Makefile:
-
-```bash
-make docker-build
-```
-
-### Шаг 5. Запуск контейнера
-
-```bash
-docker run --rm -p 8080:8080 \
-  -e APP_ENV=dev \
-  -e HTTP_PORT=8080 \
-  -e HTTP_READ_TIMEOUT_SEC=5 \
-  -e HTTP_WRITE_TIMEOUT_SEC=10 \
-  -e HTTP_IDLE_TIMEOUT_SEC=60 \
-  -e HTTP_SHUTDOWN_TIMEOUT_SEC=10 \
-  parking-api:local
-```
-
-Альтернатива через Makefile:
-
-```bash
-make docker-run
-```
-
-Можно передавать другие значения без пересборки образа:
-
-```bash
-make docker-run APP_ENV=staging HTTP_PORT=5000
-```
-
-### Шаг 6. Проверка изоляции
-
-1. Откройте `http://localhost:8080/health` и убедитесь, что сервис отвечает.
-2. Остановите контейнер (`Ctrl+C`).
-3. Для демонстрации изоляции временно уберите `go` из `PATH` или переименуйте локальную папку с установленным Go.
-4. Запустите контейнер снова той же командой:
-
-```bash
-docker run --rm -p 5000:5000 \
-  -e APP_ENV=staging \
-  -e HTTP_PORT=5000 \
-  parking-api:local
-```
-
-Сервис продолжит работать, потому что рантайм и зависимости находятся внутри образа, а не в основной системе.
-
-### Проверка независимости конфигурации (без пересборки)
-
-Запустите один и тот же образ дважды с разными env:
-
-```bash
-docker run --rm -p 5000:5000 -e HTTP_PORT=5000 -e APP_ENV=staging parking-api:local
-docker run --rm -p 8081:8081 -e HTTP_PORT=8081 -e APP_ENV=prod parking-api:local
-```
-
-Поведение (порт/окружение) меняется без `docker build`.
-
-### Шаг 7 (бонус). Чистота и повторяемость
-
-1. Остановите контейнер.
-2. Удалите локальные артефакты проекта (например, `bin/`).
-3. Пересоберите образ:
-
-```bash
-docker build -t parking-api:local .
-```
-
-Сборка снова пройдет успешно, так как все зависимости подтягиваются и собираются внутри Docker-окружения.
-
-## Что дальше по курсу
-
-На следующих практиках можно последовательно добавлять следующие факторы:
-
-- backing services (PostgreSQL, Redis) как attachable resources;
-- отдельные build/release/run стадии;
-- stateless-процессы и horizontal scaling;
-- gRPC-контракты для межсервисного взаимодействия при сохранении REST наружу.

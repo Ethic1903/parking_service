@@ -9,9 +9,12 @@ import (
 	"os/signal"
 	"syscall"
 
-	v1 "parking-service/api/v1"
-	"parking-service/internal/config"
-	"parking-service/internal/parking"
+	v1 "parking-service/internal/api/v1"
+	"parking-service/internal/pkg/repository"
+	"parking-service/internal/pkg/service"
+	"parking-service/migrations"
+	"parking-service/tools/config"
+	"parking-service/tools/storage"
 )
 
 func main() {
@@ -24,14 +27,39 @@ func main() {
 		log.Printf("loaded config file: %s", cfg.ConfigFile)
 	}
 
-	repository := parking.NewInMemoryRepository([]parking.Spot{
-		{ID: "A-101", Location: "center", VehicleType: "car", PricePerHour: 150, IsAvailable: true},
-		{ID: "A-102", Location: "center", VehicleType: "car", PricePerHour: 170, IsAvailable: true},
-		{ID: "B-201", Location: "airport", VehicleType: "car", PricePerHour: 220, IsAvailable: true},
-		{ID: "C-301", Location: "station", VehicleType: "bike", PricePerHour: 80, IsAvailable: true},
-	})
-	service := parking.NewService(repository)
-	handler := v1.NewHandler(service)
+	db, driver, err := storage.OpenDB(cfg.Storage)
+	if err != nil {
+		log.Fatalf("failed to create DB client: %v", err)
+	}
+	defer db.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.HTTP.ShutdownTimeout)
+	if err := db.PingContext(ctx); err != nil {
+		cancel()
+		log.Fatalf("failed to ping DB: %v", err)
+	}
+	cancel()
+
+	repo, err := repository.NewSQLRepository(db, driver)
+	if err != nil {
+		log.Fatalf("failed to build repository: %v", err)
+	}
+
+	initCtx, initCancel := context.WithTimeout(context.Background(), cfg.HTTP.ShutdownTimeout)
+	if err := migrations.Run(initCtx, db, driver); err != nil {
+		initCancel()
+		log.Fatalf("failed to run DB migrations: %v", err)
+	}
+	if err := repo.SeedSpots(initCtx, repository.DefaultSeedSpots()); err != nil {
+		initCancel()
+		log.Fatalf("failed to seed parking spots: %v", err)
+	}
+	initCancel()
+
+	log.Printf("DB connected: driver=%s", driver)
+
+	svc := service.NewService(repo)
+	handler := v1.NewHandler(svc)
 
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
@@ -62,10 +90,10 @@ func main() {
 		log.Fatalf("server failed: %v", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), cfg.HTTP.ShutdownTimeout)
-	defer cancel()
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), cfg.HTTP.ShutdownTimeout)
+	defer shutdownCancel()
 
-	if err := server.Shutdown(ctx); err != nil {
+	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Printf("graceful shutdown failed: %v", err)
 	}
 }

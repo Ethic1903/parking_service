@@ -1,6 +1,11 @@
 app:
   env: dev
 
+db:
+  driver: sqlite
+  sqlite:
+    path: "parking.db"
+
 http:
   port: "8080"
   read_timeout_sec: 5

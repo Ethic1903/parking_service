@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"parking-service/tools/storage"
+
 	"github.com/spf13/viper"
 )
 
@@ -24,6 +26,7 @@ type Config struct {
 	AppEnv     string
 	ConfigFile string
 	HTTP       HTTPConfig
+	Storage    storage.Config
 }
 
 type HTTPConfig struct {
@@ -73,6 +76,7 @@ func Load() (Config, error) {
 			IdleTimeout:     toDurationSec(sanitizePositiveInt(v.GetInt("http.idle_timeout_sec"), defaultIdleTimeoutSec)),
 			ShutdownTimeout: toDurationSec(sanitizePositiveInt(v.GetInt("http.shutdown_timeout_sec"), defaultShutdownTimeoutSec)),
 		},
+		Storage: storage.LoadConfig(v),
 	}
 
 	if used := v.ConfigFileUsed(); used != "" {
@@ -85,6 +89,7 @@ func Load() (Config, error) {
 func setDefaults(v *viper.Viper) {
 	v.SetDefault("app.env", defaultAppEnv)
 	v.SetDefault("http.port", defaultHTTPPort)
+	storage.SetDefaults(v)
 	v.SetDefault("http.read_timeout_sec", defaultReadTimeoutSec)
 	v.SetDefault("http.write_timeout_sec", defaultWriteTimeoutSec)
 	v.SetDefault("http.idle_timeout_sec", defaultIdleTimeoutSec)
